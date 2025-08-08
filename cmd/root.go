@@ -11,8 +11,8 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "roricode",
-	Short: "A Terminal User Interface chat application",
-	Long:  `RoriCode is a TUI chat application built with Go and Bubble Tea, featuring OpenAI integration and profile management.`,
+	Short: "Another Terminal Coding Agent",
+	Long:  `RoriCode is Another Terminal Coding Agent designed for fast and simplicity.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default behavior: run the chat application
 		application, err := app.NewApplication()

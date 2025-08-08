@@ -3,8 +3,6 @@ package app
 import (
 	"log"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/Rorical/RoriCode/internal/config"
 	"github.com/Rorical/RoriCode/internal/core"
 	"github.com/Rorical/RoriCode/internal/dispatcher"
@@ -67,12 +65,12 @@ func (app *Application) Start() error {
 	app.dispatcher.Start()
 	app.service.Start() // Always start since service is always created
 
-	// Run UI
-	p := tea.NewProgram(app.model)
-	_, err := p.Run()
+	// Start the fmt-based UI (it will receive initial messages from core service)
+	app.model.Start()
 
-	return err
+	return nil
 }
+
 
 func (app *Application) Stop() {
 	app.service.Stop()    // Always exists

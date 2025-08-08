@@ -6,6 +6,7 @@ import (
 
 	"github.com/Rorical/RoriCode/internal/config"
 	"github.com/Rorical/RoriCode/internal/eventbus"
+	"github.com/Rorical/RoriCode/internal/models"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -145,9 +146,14 @@ func (cs *ChatService) IsReady() bool {
 	return cs.config.IsValid() && cs.state.IsConversationReady()
 }
 
+// GetInitialMessages returns the initial messages for printing to terminal
+func (cs *ChatService) GetInitialMessages() []models.Message {
+	return cs.state.GetMessages()
+}
+
 func (cs *ChatService) addWelcomeMessages(cfg *config.Config) {
 	// Welcome header
-	cs.state.AddProgramMessage("RORICODE")
+	cs.state.AddProgramMessage("-- RORICODE --")
 
 	// Profile information with status
 	if cfg.IsValid() {
