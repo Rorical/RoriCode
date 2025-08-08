@@ -18,14 +18,8 @@ type ChatState struct {
 }
 
 func NewChatState() *ChatState {
-	// Initialize with welcome messages - core is the single source of truth
-	initialMessages := []models.Message{
-		{Content: "=== Welcome to RoriCode ===", Type: models.Program},
-		{Content: "You opened RoriCode, You must be eager to build something amazing.", Type: models.Program},
-	}
-
 	return &ChatState{
-		uiMessages:        initialMessages,
+		uiMessages:        make([]models.Message, 0),
 		openaiHistory:     make([]openai.ChatCompletionMessage, 0),
 		isProcessing:      false,
 		lastError:         nil,
@@ -133,6 +127,18 @@ func (cs *ChatState) AddProgramMessage(content string) {
 		Type:    models.Program,
 	}
 	cs.uiMessages = append(cs.uiMessages, programMsg)
+}
+
+// AddSystemMessage adds a system message (configuration info, instructions)
+func (cs *ChatState) AddSystemMessage(content string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	systemMsg := models.Message{
+		Content: content,
+		Type:    models.System,
+	}
+	cs.uiMessages = append(cs.uiMessages, systemMsg)
 }
 
 // Atomic operations for event ordering

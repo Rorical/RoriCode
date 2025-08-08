@@ -25,9 +25,9 @@ func NewChatService(cfg *config.Config, eb *eventbus.EventBus) (*ChatService, er
 
 	// Only create OpenAI client if config is valid
 	if cfg.IsValid() {
-		clientConfig := openai.DefaultConfig(cfg.OpenAIAPIKey)
-		if cfg.OpenAIBaseURL != "" {
-			clientConfig.BaseURL = cfg.OpenAIBaseURL
+		clientConfig := openai.DefaultConfig(cfg.GetAPIKey())
+		if cfg.GetBaseURL() != "" {
+			clientConfig.BaseURL = cfg.GetBaseURL()
 		}
 		client = openai.NewClientWithConfig(clientConfig)
 	}
@@ -44,14 +44,8 @@ func NewChatService(cfg *config.Config, eb *eventbus.EventBus) (*ChatService, er
 		cancel:   cancel,
 	}
 
-	// Add configuration-specific messages to core state
-	if cfg.IsValid() {
-		service.state.AddProgramMessage("Type your message and press Enter.")
-	} else {
-		service.state.AddProgramMessage("API not available. Set OPENAI_API_KEY environment variable.")
-		service.state.AddProgramMessage("You can still use the interface, but responses won't be generated.")
-	}
-	service.state.AddProgramMessage("Use Ctrl+C to exit.")
+	// Add welcome screen with better formatting
+	service.addWelcomeMessages(cfg)
 
 	return service, nil
 }
@@ -107,7 +101,7 @@ func (cs *ChatService) processMessage(userMessage string) {
 	resp, err := cs.client.CreateChatCompletion(
 		cs.ctx, // Use service context for cancellation
 		openai.ChatCompletionRequest{
-			Model:    cs.config.OpenAIModel,
+			Model:    cs.config.GetModel(),
 			Messages: openaiMessages,
 		},
 	)
@@ -149,4 +143,27 @@ func (cs *ChatService) pushStateToUI() {
 
 func (cs *ChatService) IsReady() bool {
 	return cs.config.IsValid() && cs.state.IsConversationReady()
+}
+
+func (cs *ChatService) addWelcomeMessages(cfg *config.Config) {
+	// Welcome header
+	cs.state.AddProgramMessage("RORICODE")
+
+	// Profile information with status
+	if cfg.IsValid() {
+		cs.state.AddSystemMessage(fmt.Sprintf("Active Profile: %s [OK]", cfg.ActiveProfile))
+	} else {
+		cs.state.AddSystemMessage(fmt.Sprintf("Active Profile: %s [NOT CONFIGURED]", cfg.ActiveProfile))
+	}
+	// Instructions
+	if cfg.IsValid() {
+		cs.state.AddProgramMessage("Ready to chat! Type your message and press Enter")
+	} else {
+		cs.state.AddSystemMessage("Configure your profile to start chatting:")
+		cs.state.AddSystemMessage("• Run: roricode profile add <name>")
+		cs.state.AddSystemMessage("• Or edit: ~/.roricode/config.json")
+	}
+
+	cs.state.AddSystemMessage("Controls: Ctrl+C or 'q' to exit")
+	cs.state.AddProgramMessage("")
 }

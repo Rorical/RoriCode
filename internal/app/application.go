@@ -28,7 +28,11 @@ type AppModel struct {
 
 func NewApplication() (*Application, error) {
 	// Load configuration
-	cfg := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Printf("Failed to load configuration: %v", err)
+		return nil, err
+	}
 
 	// Create event bus
 	eb := eventbus.NewEventBus()
