@@ -1,14 +1,15 @@
-# RoriCode - Go TUI Chat Application
+# RoriCode - Go Console Chat Application
 
 ## Overview
-RoriCode is a Terminal User Interface (TUI) chat application built with Go and the Bubble Tea framework. It features a clean, event-driven architecture with proper separation of concerns, OpenAI integration, and robust error handling.
+RoriCode is a console-based chat application built with Go featuring pure fmt-based terminal UI, OpenAI integration with tool support, and robust event-driven architecture. The application has evolved from a Bubble Tea TUI to a streamlined console interface with advanced features.
 
 ## Current Status
-✅ **Fully Refactored Event-Driven Architecture**
-- Eliminated all 6 major anti-patterns identified in the codebase
-- Implemented proper dependency injection and circuit breaker patterns
-- Single source of truth for state management
-- Clean separation between UI and business logic
+✅ **Pure Console Interface with Tool System**
+- Complete removal of Bubble Tea framework for streamlined console UI
+- Comprehensive OpenAI Tools API integration with async execution
+- Smart terminal cursor manipulation for clean UI experience
+- Real-time tool call and result display with status bar management
+- Resource-optimized message transmission system
 
 ## Architecture
 
@@ -19,11 +20,11 @@ RoriCode/
 ├── internal/
 │   ├── app/
 │   │   ├── application.go             # Application lifecycle management
-│   │   └── model.go                   # Bubble Tea model implementation
+│   │   └── model.go                   # Pure console UI with terminal control
 │   ├── config/
-│   │   └── config.go                  # Environment configuration
+│   │   └── config.go                  # Profile-based JSON configuration
 │   ├── core/
-│   │   ├── service.go                 # ChatService with OpenAI integration
+│   │   ├── service.go                 # ChatService with OpenAI and tool integration
 │   │   └── state.go                   # Core state management (single source of truth)
 │   ├── dispatcher/
 │   │   └── event_dispatcher.go        # Event routing between core and UI
@@ -31,70 +32,90 @@ RoriCode/
 │   │   └── eventbus.go                # Channel-based event bus with circuit breaker
 │   ├── models/
 │   │   ├── app.go                     # UI-specific application state model
-│   │   └── message.go                 # Message types and structures
-│   └── update/
-│       ├── handlers.go                # Event handlers with error handling
-│       └── update.go                  # Main update dispatcher
-└── ui/
-    ├── components/
-    │   ├── input.go                   # Input box rendering
-    │   ├── messages.go                # Message history rendering
-    │   └── status.go                  # Status bar rendering
-    └── styles/
-        └── styles.go                  # UI styling functions
+│   │   └── message.go                 # Message types: User, Assistant, Program, ToolCall, ToolResult
+│   ├── tools/
+│   │   ├── registry.go                # Tool registry with async execution
+│   │   └── builtin.go                 # Built-in tools (echo, time, random)
+│   └── utils/
+│       ├── styles.go                  # Lipgloss styling functions
+│       └── markdown.go                # Recursive markdown rendering
 ```
 
 ### Event-Driven Architecture
-- **UI Layer**: Handles user input, renders components, manages local UI state
+- **Console UI Layer**: Pure fmt-based terminal interface with ANSI cursor control
 - **Event Bus**: Channel-based communication with circuit breaker pattern
-- **Core Layer**: Business logic, OpenAI API calls, conversation state management
+- **Core Layer**: Business logic, OpenAI API calls, tool execution, conversation state
+- **Tool System**: Registry-based async tool execution with OpenAI integration
 - **Application Layer**: Dependency injection, lifecycle management
 
 ### Data Flow
-1. User input → UI handlers → EventBus → Core handlers
-2. Core processes message → OpenAI API call → State update
-3. Core pushes state → EventBus → UI receives update → Re-render
+1. User input → Console scanner → EventBus → Core handlers
+2. Core processes message → OpenAI API call (with tools) → Tool execution → State update
+3. Core pushes state → EventBus → Console receives update → Direct terminal printing
+4. Real-time tool calls/results display with status bar preservation
 
 ### Message Types
 - **Program**: Welcome messages and program information (purple/magenta, bold, centered)
-- **System**: System notifications and instructions (gray)
-- **User**: User input messages (blue with left border)
-- **Assistant**: OpenAI assistant responses (orange with left border)
+- **User**: User input messages (blue with left border) - preserved as typed
+- **Assistant**: OpenAI assistant responses (orange with left border, markdown rendered)
+- **ToolCall**: Tool invocations with name and arguments (styled with special brackets)
+- **ToolResult**: Tool execution results (indented with arrow prefix)
 
 ### Key Features
-- **Event-Driven Architecture**: UI and core communicate via channel-based event bus
-- **Circuit Breaker Pattern**: Automatic failure handling and recovery
-- **Single Source of Truth**: Core state manages all conversation history
-- **Atomic State Updates**: Race-condition-free state management
-- **Natural Scrolling**: Messages expand naturally, allowing terminal scroll navigation
-- **Styled Components**: Each message type has distinct visual styling
-- **Loading Animations**: Animated dots during OpenAI processing
-- **Responsive Layout**: Adapts to terminal size changes
-- **OpenAI Integration**: Supports custom API keys and base URLs
+- **Pure Console Interface**: Direct terminal printing with fmt, no TUI framework overhead
+- **OpenAI Tools Integration**: Full support for OpenAI Tools API with async execution
+- **Smart Terminal Control**: ANSI escape sequences for cursor manipulation and status management
+- **Real-time Tool Display**: Immediate tool call and result visualization
+- **Status Bar Management**: Smart clear-print-restore cycle for clean UI
+- **Resource Optimization**: Only sends new messages to reduce bandwidth usage
+- **Recursion Protection**: Depth-limited tool calling to prevent infinite loops
+- **Profile-based Configuration**: JSON config with multiple profile support
+- **Markdown Rendering**: Rich text formatting for assistant responses
+- **Terminal Scrollback**: Full integration with terminal scrolling history
 
 ### Error Handling
 - Circuit breaker pattern prevents event bus overload
 - Graceful degradation when OpenAI is unavailable
 - Proper context cancellation for goroutine cleanup
-- Error propagation with user-friendly status messages
+- Tool execution error handling with user-friendly messages
+- Automatic input line clearing on errors
 
-### UI Layout
-1. **Message History**: Scrollable area at top with all chat messages
-2. **Input Box**: Rounded rectangle with ">" prompt at bottom
-3. **Status Bar**: Shows current status, errors, and loading animations at very bottom
+### Console Interface
+- **Message History**: Direct terminal printing using scrollback buffer
+- **Input Line**: Simple "> " prompt with automatic clearing after send
+- **Status Display**: Dynamic status messages with smart clearing/restoration
+- **Tool Visualization**: Real-time tool calls and results with preserved status
 
 ### Key Bindings
-- **Enter**: Send message to OpenAI
-- **Backspace**: Delete character
-- **Ctrl+C / q**: Quit application
-- **Any character**: Add to input
+- **Enter**: Send message to OpenAI (input line auto-clears)
+- **Ctrl+C / q / quit / exit**: Quit application
+- **Any text**: Direct console input
 
 ### Configuration
-Set environment variables for OpenAI integration:
+Profile-based JSON configuration at `~/.roricode/config.json`:
+```json
+{
+  "active_profile": "default",
+  "profiles": {
+    "default": {
+      "api_key": "your-api-key",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4"
+    }
+  }
+}
+```
+
+CLI profile management:
 ```bash
-export OPENAI_API_KEY="your-api-key"
-export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
-export OPENAI_MODEL="gpt-3.5-turbo"  # Optional, defaults to gpt-3.5-turbo
+# Add new profile
+roricode profile add <name>
+
+# List profiles  
+roricode profile list
+
+# Switch profile
+roricode profile use <name>
 ```
 
 ### Development Commands
@@ -112,19 +133,32 @@ go mod tidy && go run main.go
 go test ./...
 ```
 
-## Architecture Benefits
-- **Event-Driven**: Proper separation of UI and business logic
-- **Resilient**: Circuit breaker pattern handles failures gracefully  
-- **Testable**: Each component can be tested independently
-- **Maintainable**: Clean dependency injection and separation of concerns
-- **Extensible**: Easy to add new message types, handlers, or UI components
-- **Performance**: Efficient channel-based communication and atomic state updates
-- **Robust**: Proper error handling and context-based cancellation
+### Tool System
+Built-in tools available for OpenAI:
+- **echo**: Simple text echo for testing
+- **time**: Current timestamp generation  
+- **random**: Random number generation
 
-## Anti-Patterns Eliminated
-1. ✅ **Global State Variables**: Replaced with dependency injection
-2. ✅ **Mixed Responsibilities**: Separated UI, business logic, and infrastructure  
-3. ✅ **Inefficient Event Loops**: Proper blocking with context cancellation
-4. ✅ **Missing Event Ordering**: Atomic state operations guarantee consistency
-5. ✅ **Poor Error Handling**: Circuit breaker pattern with error callbacks
-6. ✅ **State Duplication**: Single source of truth in core state management
+Tool execution features:
+- **Async Processing**: Non-blocking tool execution
+- **Real-time Display**: Immediate tool call/result visualization
+- **Recursion Control**: Maximum depth protection (5 levels)
+- **Error Recovery**: Graceful handling of tool failures
+- **OpenAI Integration**: Seamless integration with chat completion
+
+## Architecture Benefits
+- **Lightweight**: Pure console interface with minimal overhead
+- **Real-time**: Immediate tool execution and result display
+- **Resilient**: Circuit breaker pattern and error recovery
+- **Extensible**: Easy tool registration and message type additions
+- **Resource Efficient**: Optimized message transmission and state updates
+- **Terminal Native**: Full integration with terminal scrolling and history
+- **Tool-Enabled**: Comprehensive OpenAI Tools API support
+
+## Evolution Summary
+1. ✅ **Bubble Tea → Pure Console**: Complete framework removal for performance
+2. ✅ **Environment → Profile Config**: JSON-based configuration management
+3. ✅ **Basic Chat → Tool Integration**: Full OpenAI Tools API support
+4. ✅ **Static UI → Dynamic Display**: Real-time tool execution visualization
+5. ✅ **Resource Waste → Optimization**: Incremental message transmission
+6. ✅ **Simple Status → Smart Management**: Status clear-print-restore cycle

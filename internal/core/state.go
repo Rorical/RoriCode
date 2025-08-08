@@ -15,6 +15,10 @@ type ChatState struct {
 	isProcessing      bool
 	lastError         error
 	conversationReady bool
+	// Tool call tracking
+	pendingToolCalls  map[string]bool // Track pending tool calls by ID
+	recursionDepth    int             // Current recursion depth for tool calls
+	maxRecursionDepth int             // Maximum allowed recursion depth
 }
 
 func NewChatState() *ChatState {
@@ -24,6 +28,9 @@ func NewChatState() *ChatState {
 		isProcessing:      false,
 		lastError:         nil,
 		conversationReady: true,
+		pendingToolCalls:  make(map[string]bool),
+		recursionDepth:    0,
+		maxRecursionDepth: 5, // Prevent infinite recursion
 	}
 }
 
@@ -129,17 +136,6 @@ func (cs *ChatState) AddProgramMessage(content string) {
 	cs.uiMessages = append(cs.uiMessages, programMsg)
 }
 
-// AddSystemMessage adds a system message (configuration info, instructions)
-func (cs *ChatState) AddSystemMessage(content string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	
-	systemMsg := models.Message{
-		Content: content,
-		Type:    models.System,
-	}
-	cs.uiMessages = append(cs.uiMessages, systemMsg)
-}
 
 // Atomic operations for event ordering
 func (cs *ChatState) StartProcessingWithUserMessage(content string) {
@@ -204,4 +200,105 @@ func (cs *ChatState) FinishProcessing() {
 	// Atomic: stop processing without changes
 	cs.isProcessing = false
 	cs.lastError = nil
+}
+
+
+// AddToolResultMessage adds a tool result message to UI and OpenAI history
+func (cs *ChatState) AddToolResultMessage(callID, toolName, result string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	// Add to UI messages
+	toolResultMsg := models.Message{
+		Content:    result,
+		Type:       models.ToolResult,
+		ToolCallID: callID,
+		ToolName:   toolName,
+	}
+	cs.uiMessages = append(cs.uiMessages, toolResultMsg)
+	
+	// Add to OpenAI history as tool message
+	openaiMsg := openai.ChatCompletionMessage{
+		Role:       openai.ChatMessageRoleTool,
+		Content:    result,
+		ToolCallID: callID,
+	}
+	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+}
+
+// AddAssistantMessageWithToolCalls adds an assistant message with tool calls to both UI and OpenAI history
+func (cs *ChatState) AddAssistantMessageWithToolCalls(content string, toolCalls []openai.ToolCall) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	// Add to UI messages if there's content
+	if content != "" {
+		assistantMsg := models.Message{
+			Content: content,
+			Type:    models.Assistant,
+		}
+		cs.uiMessages = append(cs.uiMessages, assistantMsg)
+	}
+	
+	// Add to OpenAI history as single message with content and tool calls
+	openaiMsg := openai.ChatCompletionMessage{
+		Role:      openai.ChatMessageRoleAssistant,
+		Content:   content,
+		ToolCalls: toolCalls,
+	}
+	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+}
+
+// AddToolCallMessageToUI adds a tool call message only to UI (not OpenAI history)
+func (cs *ChatState) AddToolCallMessageToUI(callID, toolName, args string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	toolCallMsg := models.Message{
+		Content:    args,
+		Type:       models.ToolCall,
+		ToolCallID: callID,
+		ToolName:   toolName,
+		ToolArgs:   args,
+	}
+	cs.uiMessages = append(cs.uiMessages, toolCallMsg)
+}
+
+// Tool call tracking methods
+func (cs *ChatState) AddPendingToolCall(callID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.pendingToolCalls[callID] = true
+}
+
+func (cs *ChatState) CompletePendingToolCall(callID string) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	
+	delete(cs.pendingToolCalls, callID)
+	return len(cs.pendingToolCalls) == 0 // Return true if all calls complete
+}
+
+func (cs *ChatState) HasPendingToolCalls() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return len(cs.pendingToolCalls) > 0
+}
+
+func (cs *ChatState) CanRecurse() bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.recursionDepth < cs.maxRecursionDepth
+}
+
+func (cs *ChatState) IncrementRecursion() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.recursionDepth++
+}
+
+func (cs *ChatState) ResetRecursion() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.recursionDepth = 0
 }

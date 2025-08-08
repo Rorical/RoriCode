@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
-	"unsafe"
 
 	"github.com/Rorical/RoriCode/internal/eventbus"
 	"github.com/Rorical/RoriCode/internal/models"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/Rorical/RoriCode/internal/utils"
 )
 
 // Terminal control sequences
@@ -20,42 +18,6 @@ func clearLine() {
 
 func moveCursorUp(lines int) {
 	fmt.Printf("\033[%dA", lines) // Move cursor up N lines
-}
-
-// Style functions
-func statusStyle(width int) lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Background(lipgloss.Color("235")).
-		Padding(0, 1).
-		Width(width)
-}
-
-func systemStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("555")).
-		Padding(0, 2)
-}
-
-func userStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("343")).
-		Padding(0, 2)
-}
-
-func assistantStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("214")).
-		BorderForeground(lipgloss.Color("214")).
-		Padding(0, 1)
-}
-
-func programStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("141")).
-		Bold(true).
-		Padding(0, 2).
-		Align(lipgloss.Center)
 }
 
 // Start the simple fmt-based UI loop
@@ -88,18 +50,16 @@ func (m *AppModel) listenForCoreEvents() {
 // handleCoreEvent processes events from core and prints new messages
 func (m *AppModel) handleCoreEvent(coreEvent eventbus.CoreEvent) {
 	if stateEvent, ok := coreEvent.(eventbus.StateUpdateEvent); ok {
-		// Check if we have new messages to print
-		currentCount := len(m.appModel.Messages)
-		newMessages := stateEvent.Messages[currentCount:]
+		// Core now only sends new messages, so we can print them all
+		newMessages := stateEvent.Messages
 
-		m.clearPreviousStatus()
-		// Print each new message
+		// Print each new message immediately with smart status handling
 		for _, msg := range newMessages {
-			m.printMessageToScrollArea(msg)
+			m.printMessageWithStatusHandling(msg)
 		}
 
-		// Update local state
-		m.appModel.Messages = stateEvent.Messages
+		// Update local state - append new messages to existing ones
+		m.appModel.Messages = append(m.appModel.Messages, newMessages...)
 		m.appModel.Loading = stateEvent.IsProcessing
 
 		// Update status
@@ -107,11 +67,19 @@ func (m *AppModel) handleCoreEvent(coreEvent eventbus.CoreEvent) {
 			m.appModel.Status = "Error: " + stateEvent.Error.Error()
 			// Show error status
 			m.printStatusBar()
+			m.statusShown = true
 		} else if stateEvent.IsProcessing {
-			m.appModel.Status = "Processing..."
-			m.printStatusBar()
+			if !m.statusShown {
+				m.appModel.Status = "Processing..."
+				m.printStatusBar()
+				m.statusShown = true
+			}
 		} else {
-			// Don't show "Ready" status - just clear any previous status
+			// Don't show "Ready" status - just clear any previous status if shown
+			if m.statusShown {
+				m.clearPreviousStatus()
+				m.statusShown = false
+			}
 			m.appModel.Status = "Ready"
 		}
 
@@ -122,23 +90,75 @@ func (m *AppModel) handleCoreEvent(coreEvent eventbus.CoreEvent) {
 	}
 }
 
+// printMessageWithStatusHandling handles status clearing/restoring for different message types
+func (m *AppModel) printMessageWithStatusHandling(msg models.Message) {
+	// For tool calls and tool results, clear status first, print message, then restore status
+	if msg.Type == models.ToolCall || msg.Type == models.ToolResult {
+		// Clear previous status if shown
+		var wasStatusShown bool
+		var previousStatus string
+		if m.statusShown {
+			wasStatusShown = true
+			previousStatus = m.appModel.Status
+			m.clearPreviousStatus()
+			m.statusShown = false
+		}
+
+		// Print the tool message
+		m.printMessageToScrollArea(msg)
+
+		// Restore status if it was previously shown
+		if wasStatusShown {
+			m.appModel.Status = previousStatus
+			m.printStatusBar()
+			m.statusShown = true
+		}
+	} else {
+		// For other message types (User, Assistant, Program), clear status normally
+		if m.statusShown {
+			m.clearPreviousStatus()
+			m.statusShown = false
+		}
+		m.printMessageToScrollArea(msg)
+	}
+}
+
 // printMessageToScrollArea prints a message in the scrollable area
 func (m *AppModel) printMessageToScrollArea(msg models.Message) {
 	switch msg.Type {
-	case models.System:
-		fmt.Println(systemStyle().Render(msg.Content))
 	case models.User:
-		fmt.Println(userStyle().Render("> " + msg.Content))
+		fmt.Println(utils.UserStyle().Render("> " + msg.Content))
 	case models.Assistant:
-		fmt.Println(assistantStyle().Render(">> " + msg.Content))
+		// Render markdown for assistant messages
+		renderedContent := utils.RenderMarkdown(msg.Content)
+		// Add two-space indentation to all lines except the first
+		lines := strings.Split(renderedContent, "\n")
+		for i := 1; i < len(lines); i++ {
+			lines[i] = "   " + lines[i]
+		}
+		indentedContent := strings.Join(lines, "\n")
+		fmt.Println(utils.AssistantStyle().Render(">> " + indentedContent))
 	case models.Program:
-		fmt.Println(programStyle().Render(msg.Content))
+		fmt.Println(utils.ProgramStyle().Render(msg.Content))
+	case models.ToolCall:
+		// Format tool call with name and arguments
+		toolCallContent := fmt.Sprintf("「%s(%s)」", msg.ToolName, msg.ToolArgs)
+		fmt.Println(utils.ToolCallStyle().Render(toolCallContent))
+	case models.ToolResult:
+		// Format tool result with name and response
+		lines := strings.Split(msg.Content, "\n")
+		for i := 1; i < len(lines); i++ {
+			lines[i] = "  " + lines[i]
+		}
+		indentedContent := strings.Join(lines, "\n")
+		toolResultContent := fmt.Sprintf("·%s → %s", msg.ToolName, indentedContent)
+		fmt.Println(utils.ToolResultStyle().Render(toolResultContent))
 	}
 }
 
 // printStatusBar prints the current status
 func (m *AppModel) printStatusBar() {
-	fmt.Println(statusStyle(80).Render(m.appModel.Status))
+	fmt.Println(utils.StatusStyle(80).Render(m.appModel.Status))
 }
 
 // clearPreviousStatus clears the previous status line
@@ -171,13 +191,18 @@ func (m *AppModel) inputLoop() {
 			break
 		}
 
-		// Keep the input line as is - don't clear or reformat it
+		// Clear the user input line after enter
+		moveCursorUp(1)
+		clearLine()
 
 		// Send message to core if chat service is ready
 		if m.appModel.ChatServiceReady {
 			eventBus := m.dispatcher.GetEventBus()
 			if err := eventBus.SendToCore(eventbus.SendMessageEvent{Message: input}); err != nil {
-				m.clearPreviousStatus()
+				if m.statusShown {
+					m.clearPreviousStatus()
+					m.statusShown = false
+				}
 				fmt.Printf("Error sending message: %s\n", err.Error())
 				fmt.Print("> ")
 			}

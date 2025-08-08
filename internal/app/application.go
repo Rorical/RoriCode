@@ -20,8 +20,9 @@ type Application struct {
 }
 
 type AppModel struct {
-	appModel   models.AppModel
-	dispatcher *dispatcher.EventDispatcher
+	appModel      models.AppModel
+	dispatcher    *dispatcher.EventDispatcher
+	statusShown   bool // Track if we have a status bar that needs clearing
 }
 
 func NewApplication() (*Application, error) {
