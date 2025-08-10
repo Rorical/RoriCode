@@ -137,7 +137,7 @@ func (m *AppModel) printMessageToScrollArea(msg models.Message) {
 			lines[i] = "   " + lines[i]
 		}
 		indentedContent := strings.Join(lines, "\n")
-		fmt.Println(utils.AssistantStyle().Render(">> " + indentedContent))
+		fmt.Print(utils.AssistantStyle().Render(">> " + indentedContent) + "\n")
 	case models.Program:
 		fmt.Println(utils.ProgramStyle().Render(msg.Content))
 	case models.ToolCall:

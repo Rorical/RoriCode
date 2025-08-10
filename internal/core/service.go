@@ -249,8 +249,7 @@ func (cs *ChatService) handleToolCalls(toolCalls []openai.ToolCall) {
 	}
 	
 	for _, call := range toolCalls {
-		// Add individual tool call message to UI for display
-		cs.state.AddToolCallMessageToUI(call.ID, call.Function.Name, call.Function.Arguments)
+		// Tool calls are automatically displayed via GetMessages() conversion
 		cs.pushStateToUI() // Show tool call immediately
 		
 		// Parse arguments

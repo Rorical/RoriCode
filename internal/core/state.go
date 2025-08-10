@@ -10,8 +10,8 @@ import (
 // ChatState manages the conversation state for event-driven architecture
 type ChatState struct {
 	mu                sync.RWMutex
-	uiMessages        []models.Message                // Messages for UI display
-	openaiHistory     []openai.ChatCompletionMessage // Direct OpenAI conversation history
+	chatHistory       []openai.ChatCompletionMessage // Single source of truth for conversation
+	programMessages   []models.Message                // Program messages (welcome, status, etc.)
 	isProcessing      bool
 	lastError         error
 	conversationReady bool
@@ -23,8 +23,8 @@ type ChatState struct {
 
 func NewChatState() *ChatState {
 	return &ChatState{
-		uiMessages:        make([]models.Message, 0),
-		openaiHistory:     make([]openai.ChatCompletionMessage, 0),
+		chatHistory:       make([]openai.ChatCompletionMessage, 0),
+		programMessages:   make([]models.Message, 0),
 		isProcessing:      false,
 		lastError:         nil,
 		conversationReady: true,
@@ -34,58 +34,74 @@ func NewChatState() *ChatState {
 	}
 }
 
-func (cs *ChatState) AddUserMessage(content string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	
-	// Add to UI messages
-	userMsg := models.Message{
-		Content: content,
-		Type:    models.User,
-	}
-	cs.uiMessages = append(cs.uiMessages, userMsg)
-	
-	// Add to OpenAI history
-	openaiMsg := openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: content,
-	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
-}
-
-func (cs *ChatState) AddAssistantMessage(content string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	
-	// Add to UI messages
-	assistantMsg := models.Message{
-		Content: content,
-		Type:    models.Assistant,
-	}
-	cs.uiMessages = append(cs.uiMessages, assistantMsg)
-	
-	// Add to OpenAI history
-	openaiMsg := openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleAssistant,
-		Content: content,
-	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
-}
 
 func (cs *ChatState) GetOpenAIHistory() []openai.ChatCompletionMessage {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
-	result := make([]openai.ChatCompletionMessage, len(cs.openaiHistory))
-	copy(result, cs.openaiHistory)
+	result := make([]openai.ChatCompletionMessage, len(cs.chatHistory))
+	copy(result, cs.chatHistory)
 	return result
 }
 
 func (cs *ChatState) GetMessages() []models.Message {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
-	result := make([]models.Message, len(cs.uiMessages))
-	copy(result, cs.uiMessages)
+	
+	var result []models.Message
+	
+	// First add program messages
+	result = append(result, cs.programMessages...)
+	
+	// Convert OpenAI history to UI messages
+	for _, openaiMsg := range cs.chatHistory {
+		switch openaiMsg.Role {
+		case openai.ChatMessageRoleUser:
+			result = append(result, models.Message{
+				Content: openaiMsg.Content,
+				Type:    models.User,
+			})
+		case openai.ChatMessageRoleAssistant:
+			if openaiMsg.Content != "" {
+				result = append(result, models.Message{
+					Content: openaiMsg.Content,
+					Type:    models.Assistant,
+				})
+			}
+			// Handle tool calls
+			for _, toolCall := range openaiMsg.ToolCalls {
+				result = append(result, models.Message{
+					Content:    toolCall.Function.Arguments,
+					Type:       models.ToolCall,
+					ToolCallID: toolCall.ID,
+					ToolName:   toolCall.Function.Name,
+					ToolArgs:   toolCall.Function.Arguments,
+				})
+			}
+		case openai.ChatMessageRoleTool:
+			result = append(result, models.Message{
+				Content:    openaiMsg.Content,
+				Type:       models.ToolResult,
+				ToolCallID: openaiMsg.ToolCallID,
+				ToolName:   extractToolNameFromHistory(cs.openaiHistory, openaiMsg.ToolCallID),
+			})
+		}
+	}
+	
 	return result
+}
+
+// extractToolNameFromHistory finds the tool name for a given tool call ID
+func extractToolNameFromHistory(history []openai.ChatCompletionMessage, toolCallID string) string {
+	for _, msg := range history {
+		if msg.Role == openai.ChatMessageRoleAssistant {
+			for _, toolCall := range msg.ToolCalls {
+				if toolCall.ID == toolCallID {
+					return toolCall.Function.Name
+				}
+			}
+		}
+	}
+	return "unknown"
 }
 
 func (cs *ChatState) SetProcessing(processing bool) {
@@ -133,7 +149,7 @@ func (cs *ChatState) AddProgramMessage(content string) {
 		Content: content,
 		Type:    models.Program,
 	}
-	cs.uiMessages = append(cs.uiMessages, programMsg)
+	cs.programMessages = append(cs.programMessages, programMsg)
 }
 
 
@@ -146,14 +162,7 @@ func (cs *ChatState) StartProcessingWithUserMessage(content string) {
 	cs.isProcessing = true
 	cs.lastError = nil
 	
-	// Add to UI messages
-	userMsg := models.Message{
-		Content: content,
-		Type:    models.User,
-	}
-	cs.uiMessages = append(cs.uiMessages, userMsg)
-	
-	// Add to OpenAI history
+	// Add to OpenAI history (single source of truth)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: content,
@@ -169,14 +178,7 @@ func (cs *ChatState) FinishProcessingWithAssistantMessage(content string) {
 	cs.isProcessing = false
 	cs.lastError = nil
 	
-	// Add to UI messages
-	assistantMsg := models.Message{
-		Content: content,
-		Type:    models.Assistant,
-	}
-	cs.uiMessages = append(cs.uiMessages, assistantMsg)
-	
-	// Add to OpenAI history
+	// Add to OpenAI history (single source of truth)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleAssistant,
 		Content: content,
@@ -203,21 +205,12 @@ func (cs *ChatState) FinishProcessing() {
 }
 
 
-// AddToolResultMessage adds a tool result message to UI and OpenAI history
+// AddToolResultMessage adds a tool result message to OpenAI history
 func (cs *ChatState) AddToolResultMessage(callID, toolName, result string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	
-	// Add to UI messages
-	toolResultMsg := models.Message{
-		Content:    result,
-		Type:       models.ToolResult,
-		ToolCallID: callID,
-		ToolName:   toolName,
-	}
-	cs.uiMessages = append(cs.uiMessages, toolResultMsg)
-	
-	// Add to OpenAI history as tool message
+	// Add to OpenAI history as tool message (UI messages generated on-demand)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:       openai.ChatMessageRoleTool,
 		Content:    result,
@@ -226,21 +219,12 @@ func (cs *ChatState) AddToolResultMessage(callID, toolName, result string) {
 	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
 }
 
-// AddAssistantMessageWithToolCalls adds an assistant message with tool calls to both UI and OpenAI history
+// AddAssistantMessageWithToolCalls adds an assistant message with tool calls to OpenAI history
 func (cs *ChatState) AddAssistantMessageWithToolCalls(content string, toolCalls []openai.ToolCall) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	
-	// Add to UI messages if there's content
-	if content != "" {
-		assistantMsg := models.Message{
-			Content: content,
-			Type:    models.Assistant,
-		}
-		cs.uiMessages = append(cs.uiMessages, assistantMsg)
-	}
-	
-	// Add to OpenAI history as single message with content and tool calls
+	// Add to OpenAI history as single message with content and tool calls (UI messages generated on-demand)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:      openai.ChatMessageRoleAssistant,
 		Content:   content,
@@ -249,20 +233,6 @@ func (cs *ChatState) AddAssistantMessageWithToolCalls(content string, toolCalls 
 	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
 }
 
-// AddToolCallMessageToUI adds a tool call message only to UI (not OpenAI history)
-func (cs *ChatState) AddToolCallMessageToUI(callID, toolName, args string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	
-	toolCallMsg := models.Message{
-		Content:    args,
-		Type:       models.ToolCall,
-		ToolCallID: callID,
-		ToolName:   toolName,
-		ToolArgs:   args,
-	}
-	cs.uiMessages = append(cs.uiMessages, toolCallMsg)
-}
 
 // Tool call tracking methods
 func (cs *ChatState) AddPendingToolCall(callID string) {
