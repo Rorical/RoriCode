@@ -122,8 +122,8 @@ func (cs *ChatService) continueConversation() {
 	// Increment recursion depth for each OpenAI API call to prevent infinite loops
 	cs.state.IncrementRecursion()
 
-	// Get chat conversation history
-	openaiMessages := cs.state.GetChatHistory()
+	// Get chat conversation history with dynamic system prompt
+	openaiMessages := cs.state.GetChatHistoryWithSystemPrompt()
 
 	// Call OpenAI API with tool support
 	req := openai.ChatCompletionRequest{
