@@ -47,3 +47,9 @@ func ToolResultStyle() lipgloss.Style {
 		Padding(0, 1).
 		MarginLeft(2)
 }
+
+func DangerStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("196")).  // Bright red
+		Bold(true)
+}

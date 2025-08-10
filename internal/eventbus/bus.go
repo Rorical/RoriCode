@@ -33,6 +33,24 @@ type StateUpdateEvent struct {
 
 func (e StateUpdateEvent) CoreEvent() {}
 
+// ConfirmationRequestEvent - Core requests user confirmation for dangerous operations
+type ConfirmationRequestEvent struct {
+	ID          string // Unique identifier for this confirmation request
+	Operation   string // Description of the operation to confirm
+	Command     string // The actual command/operation details
+	Dangerous   bool   // Whether this is a potentially dangerous operation
+}
+
+func (e ConfirmationRequestEvent) CoreEvent() {}
+
+// ConfirmationResponseEvent - UI sends user's confirmation decision back to Core
+type ConfirmationResponseEvent struct {
+	ID       string // Must match the ID from ConfirmationRequestEvent
+	Approved bool   // User's decision: true = proceed, false = abort
+}
+
+func (e ConfirmationResponseEvent) UIEvent() {}
+
 // EventBusError represents errors in event processing
 type EventBusError struct {
 	Operation string

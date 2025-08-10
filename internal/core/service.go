@@ -2,8 +2,11 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/Rorical/RoriCode/internal/config"
 	"github.com/Rorical/RoriCode/internal/eventbus"
@@ -13,14 +16,16 @@ import (
 )
 
 type ChatService struct {
-	client         *openai.Client
-	config         *config.Config
-	state          *ChatState
-	eventBus       *eventbus.EventBus
-	toolRegistry   *tools.Registry
-	ctx            context.Context
-	cancel         context.CancelFunc
-	lastSentCount  int // Track how many messages we've sent to UI
+	client           *openai.Client
+	config           *config.Config
+	state            *ChatState
+	eventBus         *eventbus.EventBus
+	toolRegistry     *tools.Registry
+	ctx              context.Context
+	cancel           context.CancelFunc
+	lastSentCount    int                            // Track how many messages we've sent to UI
+	pendingConfirms  map[string]chan bool           // Track pending confirmations
+	confirmMutex     sync.RWMutex                   // Protect pendingConfirms map
 }
 
 // NewChatService creates a ChatService regardless of config validity
@@ -45,15 +50,19 @@ func NewChatService(cfg *config.Config, eb *eventbus.EventBus) (*ChatService, er
 	tools.RegisterBuiltinTools(toolRegistry)
 
 	service := &ChatService{
-		client:        client, // May be nil if config invalid
-		config:        cfg,
-		state:         state,
-		eventBus:      eb,
-		toolRegistry:  toolRegistry,
-		ctx:           ctx,
-		cancel:        cancel,
-		lastSentCount: 0,
+		client:          client, // May be nil if config invalid
+		config:          cfg,
+		state:           state,
+		eventBus:        eb,
+		toolRegistry:    toolRegistry,
+		ctx:             ctx,
+		cancel:          cancel,
+		pendingConfirms: make(map[string]chan bool),
+		lastSentCount:   0,
 	}
+
+	// Set the service as the confirmator for tools that need confirmation
+	toolRegistry.SetConfirmator(service)
 
 	// Add welcome screen with better formatting
 	service.addWelcomeMessages(cfg)
@@ -90,6 +99,8 @@ func (cs *ChatService) handleUIEvent(event eventbus.UIEvent) {
 	switch e := event.(type) {
 	case eventbus.SendMessageEvent:
 		cs.processMessage(e.Message)
+	case eventbus.ConfirmationResponseEvent:
+		cs.handleConfirmationResponse(e)
 	}
 }
 
@@ -311,4 +322,78 @@ func (cs *ChatService) handleToolResult(resultChan <-chan tools.ToolResult) {
 func (cs *ChatService) continueAfterAllToolsComplete() {
 	// All tool calls completed, continue the conversation recursively
 	cs.continueConversation()
+}
+
+// generateConfirmationID generates a unique ID for confirmation requests
+func (cs *ChatService) generateConfirmationID() string {
+	bytes := make([]byte, 8)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
+
+// requestUserConfirmation sends a confirmation request to the UI and waits for response
+func (cs *ChatService) requestUserConfirmation(operation, command string, dangerous bool) bool {
+	// Generate unique ID for this confirmation
+	id := cs.generateConfirmationID()
+	
+	// Create response channel
+	responseChan := make(chan bool, 1)
+	
+	// Store the channel in pending confirmations
+	cs.confirmMutex.Lock()
+	cs.pendingConfirms[id] = responseChan
+	cs.confirmMutex.Unlock()
+	
+	// Send confirmation request to UI
+	request := eventbus.ConfirmationRequestEvent{
+		ID:        id,
+		Operation: operation,
+		Command:   command,
+		Dangerous: dangerous,
+	}
+	
+	if err := cs.eventBus.SendToUI(request); err != nil {
+		// Clean up and return false on error
+		cs.confirmMutex.Lock()
+		delete(cs.pendingConfirms, id)
+		cs.confirmMutex.Unlock()
+		return false
+	}
+	
+	// Wait for user response
+	select {
+	case approved := <-responseChan:
+		// Clean up
+		cs.confirmMutex.Lock()
+		delete(cs.pendingConfirms, id)
+		cs.confirmMutex.Unlock()
+		return approved
+	case <-cs.ctx.Done():
+		// Context cancelled, clean up
+		cs.confirmMutex.Lock()
+		delete(cs.pendingConfirms, id)
+		cs.confirmMutex.Unlock()
+		return false
+	}
+}
+
+// handleConfirmationResponse handles confirmation responses from the UI
+func (cs *ChatService) handleConfirmationResponse(response eventbus.ConfirmationResponseEvent) {
+	cs.confirmMutex.RLock()
+	responseChan, exists := cs.pendingConfirms[response.ID]
+	cs.confirmMutex.RUnlock()
+	
+	if exists {
+		// Send the response to the waiting goroutine
+		select {
+		case responseChan <- response.Approved:
+		default:
+			// Channel might be full or closed, ignore
+		}
+	}
+}
+
+// RequestConfirmation implements the Confirmator interface
+func (cs *ChatService) RequestConfirmation(operation, command string, dangerous bool) bool {
+	return cs.requestUserConfirmation(operation, command, dangerous)
 }

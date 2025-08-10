@@ -33,7 +33,7 @@ func NewChatState() *ChatState {
 		conversationReady: true,
 		pendingToolCalls:  make(map[string]bool),
 		recursionDepth:    0,
-		maxRecursionDepth: 5, // Prevent infinite recursion
+		maxRecursionDepth: 35, // Prevent infinite recursion
 	}
 }
 

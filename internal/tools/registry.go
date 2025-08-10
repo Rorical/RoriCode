@@ -16,6 +16,17 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]interface{}) (interface{}, error)
 }
 
+// Confirmator is an interface for requesting user confirmation
+type Confirmator interface {
+	RequestConfirmation(operation, command string, dangerous bool) bool
+}
+
+// ConfirmingTool is a tool that can request user confirmation before execution
+type ConfirmingTool interface {
+	Tool
+	SetConfirmator(confirmator Confirmator)
+}
+
 // ToolCall represents a tool call request
 type ToolCall struct {
 	ID       string                 `json:"id"`
@@ -50,6 +61,18 @@ func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[tool.Name()] = tool
+}
+
+// SetConfirmator sets the confirmator for all confirming tools
+func (r *Registry) SetConfirmator(confirmator Confirmator) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	for _, tool := range r.tools {
+		if confirmingTool, ok := tool.(ConfirmingTool); ok {
+			confirmingTool.SetConfirmator(confirmator)
+		}
+	}
 }
 
 // GetTool retrieves a tool by name

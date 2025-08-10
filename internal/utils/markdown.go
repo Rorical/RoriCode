@@ -59,11 +59,7 @@ func RenderMarkdown(text string) string {
 		// Handle code blocks
 		if strings.HasPrefix(line, "```") {
 			inCodeBlock = !inCodeBlock
-			if inCodeBlock {
-				result.WriteString(CodeBlockStyle().Render("┌─ Code Block ─┐") + "\n")
-			} else {
-				result.WriteString(CodeBlockStyle().Render("└──────────────┘") + "\n")
-			}
+			// Skip the ``` markers entirely - no frame needed
 			continue
 		}
 
@@ -201,9 +197,14 @@ func processItalicText(line string) string {
 
 // normalizeMarkdownNewlines handles proper markdown newline behavior:
 // - Double newlines (\n\n) become paragraph breaks (single \n in output)
+// - Multiple newlines (\n\n\n+) also become single paragraph breaks
 // - Single newlines (\n) become spaces (join lines)
 func normalizeMarkdownNewlines(text string) string {
-	// Split text into paragraphs (separated by double newlines or more)
+	// First, normalize multiple consecutive newlines to double newlines
+	// This handles cases like \n\n\n -> \n\n
+	text = regexp.MustCompile(`\n\s*\n(\s*\n)+`).ReplaceAllString(text, "\n\n")
+	
+	// Split text into paragraphs (separated by double newlines)
 	paragraphs := regexp.MustCompile(`\n\s*\n`).Split(text, -1)
 	
 	var processedParagraphs []string

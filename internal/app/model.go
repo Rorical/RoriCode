@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -36,19 +37,19 @@ func (m *AppModel) Start() {
 func (m *AppModel) listenForCoreEvents() {
 	eventBus := m.dispatcher.GetEventBus()
 
-	for {
-		select {
-		case coreEvent, ok := <-eventBus.CoreToUI():
-			if !ok {
-				return
-			}
-			m.handleCoreEvent(coreEvent)
-		}
+	for coreEvent := range eventBus.CoreToUI() {
+		m.handleCoreEvent(coreEvent)
 	}
 }
 
 // handleCoreEvent processes events from core and prints new messages
 func (m *AppModel) handleCoreEvent(coreEvent eventbus.CoreEvent) {
+	// Handle confirmation requests
+	if confirmationEvent, ok := coreEvent.(eventbus.ConfirmationRequestEvent); ok {
+		m.handleConfirmationRequest(confirmationEvent)
+		return
+	}
+
 	if stateEvent, ok := coreEvent.(eventbus.StateUpdateEvent); ok {
 		// Core now only sends new messages, so we can print them all
 		newMessages := stateEvent.Messages
@@ -137,7 +138,7 @@ func (m *AppModel) printMessageToScrollArea(msg models.Message) {
 			lines[i] = "   " + lines[i]
 		}
 		indentedContent := strings.Join(lines, "\n")
-		fmt.Print(utils.AssistantStyle().Render(">> " + indentedContent) + "\n")
+		fmt.Print(utils.AssistantStyle().Render(">> "+indentedContent) + "\n")
 	case models.Program:
 		fmt.Println(utils.ProgramStyle().Render(msg.Content))
 	case models.ToolCall:
@@ -145,15 +146,183 @@ func (m *AppModel) printMessageToScrollArea(msg models.Message) {
 		toolCallContent := fmt.Sprintf("「%s(%s)」", msg.ToolName, msg.ToolArgs)
 		fmt.Println(utils.ToolCallStyle().Render(toolCallContent))
 	case models.ToolResult:
-		// Format tool result with name and response
-		lines := strings.Split(msg.Content, "\n")
-		for i := 1; i < len(lines); i++ {
-			lines[i] = "  " + lines[i]
-		}
-		indentedContent := strings.Join(lines, "\n")
-		toolResultContent := fmt.Sprintf("·%s → %s", msg.ToolName, indentedContent)
+		// Format tool result with user-friendly summary instead of raw JSON
+		formattedResult := m.formatToolResult(msg.ToolName, msg.Content)
+		toolResultContent := fmt.Sprintf("·%s → %s", msg.ToolName, formattedResult)
 		fmt.Println(utils.ToolResultStyle().Render(toolResultContent))
 	}
+}
+
+// formatToolResult creates user-friendly summaries for tool results
+func (m *AppModel) formatToolResult(toolName, content string) string {
+	// Try to parse as JSON first
+	var result map[string]any
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		// If not JSON, return content as-is but truncated if too long
+		if len(content) > 200 {
+			return content[:200] + "..."
+		}
+		return content
+	}
+
+	switch toolName {
+	case "read_file":
+		return m.formatFileReadResult(result)
+	case "current_time":
+		// For simple string results, return as-is
+		return strings.Trim(content, "\"") // Remove JSON quotes if present
+	case "shell":
+		return m.formatShellResult(result)
+	default:
+		// For unknown tools, provide a generic summary
+		return m.formatGenericResult(result)
+	}
+}
+
+// formatFileReadResult creates a summary for file reading operations
+func (m *AppModel) formatFileReadResult(result map[string]any) string {
+	fileType, _ := result["type"].(string)
+	path, _ := result["path"].(string)
+
+	if fileType == "directory" {
+		totalItems, _ := result["total_items"].(float64)
+		return fmt.Sprintf("Listed %s directory with %.0f items", path, totalItems)
+	}
+
+	// File reading result
+	linesRead, _ := result["lines_read"].(float64)
+	matchesFound, hasMatches := result["matches_found"].(float64)
+
+	if hasMatches {
+		if matchesFound == 0 {
+			return fmt.Sprintf("No matches found in %s", path)
+		}
+		matchLine, _ := result["match_line"].(float64)
+		return fmt.Sprintf("Found %.0f matches in %s (showing match at line %.0f)", matchesFound, path, matchLine)
+	}
+
+	moreLines, _ := result["more_lines"].(bool)
+	if moreLines {
+		return fmt.Sprintf("Read first %.0f lines of %s (more content available)", linesRead, path)
+	}
+	return fmt.Sprintf("Read %.0f lines from %s", linesRead, path)
+}
+
+// formatShellResult creates a summary for shell command execution
+func (m *AppModel) formatShellResult(result map[string]any) string {
+	output, _ := result["output"].(string)
+	exitCode, _ := result["exit_code"].(float64)
+	errorMsg, hasError := result["error"].(string)
+
+	if hasError {
+		return fmt.Sprintf("Command failed (exit %d): %s", int(exitCode), errorMsg)
+	}
+
+	if exitCode != 0 {
+		return fmt.Sprintf("Command completed with exit code %d", int(exitCode))
+	}
+
+	// Truncate long output
+	if len(output) > 150 {
+		lines := strings.Split(output, "\n")
+		if len(lines) > 3 {
+			return fmt.Sprintf("Command successful (%d lines of output)", len(lines))
+		}
+		return fmt.Sprintf("Command successful: %s...", output[:100])
+	}
+
+	if output == "" {
+		return "Command completed successfully"
+	}
+	return fmt.Sprintf("Command successful: %s", strings.TrimSpace(output))
+}
+
+// formatGenericResult provides a fallback summary for unknown tool results
+func (m *AppModel) formatGenericResult(result map[string]any) string {
+	// Look for common fields that might indicate success or provide summary info
+	if message, ok := result["message"].(string); ok {
+		return message
+	}
+
+	if summary, ok := result["summary"].(string); ok {
+		return summary
+	}
+
+	if content, ok := result["content"].(string); ok {
+		if len(content) > 100 {
+			return content[:100] + "..."
+		}
+		return content
+	}
+
+	// Count the keys to give some indication of result size
+	return fmt.Sprintf("Result with %d fields", len(result))
+}
+
+// handleConfirmationRequest handles confirmation requests from core
+func (m *AppModel) handleConfirmationRequest(request eventbus.ConfirmationRequestEvent) {
+	// Convert to local type to avoid import cycle
+	m.appModel.PendingConfirmation = &models.ConfirmationRequest{
+		ID:        request.ID,
+		Operation: request.Operation,
+		Command:   request.Command,
+		Dangerous: request.Dangerous,
+	}
+
+	// Clear any existing status
+	if m.statusShown {
+		m.clearPreviousStatus()
+		m.statusShown = false
+	}
+
+	// Show the confirmation prompt using the local copy
+	fmt.Printf("\n%s\n", utils.ProgramStyle().Render("CONFIRMATION REQUIRED"))
+	fmt.Printf("Operation: %s\n", utils.BoldStyle().Render(m.appModel.PendingConfirmation.Operation))
+	if m.appModel.PendingConfirmation.Command != "" {
+		fmt.Printf("Content: %s\n", utils.CodeBlockStyle().Render(m.appModel.PendingConfirmation.Command))
+	}
+	if m.appModel.PendingConfirmation.Dangerous {
+		fmt.Printf("%s\n", utils.DangerStyle().Render("This operation may be potentially dangerous"))
+	}
+	fmt.Print("Do you still want to proceed? (y/N): ")
+}
+
+// handleConfirmationInput processes user input when a confirmation is pending
+func (m *AppModel) handleConfirmationInput(input string) {
+	if m.appModel.PendingConfirmation == nil {
+		return
+	}
+
+	// Clear the input line
+	moveCursorUp(1)
+	clearLine()
+
+	input = strings.ToLower(strings.TrimSpace(input))
+	approved := input == "y" || input == "yes"
+
+	// Send response back to core
+	eventBus := m.dispatcher.GetEventBus()
+	response := eventbus.ConfirmationResponseEvent{
+		ID:       m.appModel.PendingConfirmation.ID,
+		Approved: approved,
+	}
+
+	if err := eventBus.SendToCore(response); err != nil {
+		fmt.Printf("Error sending confirmation response: %s\n", err.Error())
+	}
+
+	// Show user's decision
+	if approved {
+		fmt.Printf("%s\n", utils.ListStyle().Render("✓ Approved - proceeding with operation"))
+	} else {
+		fmt.Printf("%s\n", utils.ListStyle().Render("✗ Denied - operation aborted"))
+	}
+
+	// Clear the pending confirmation
+	m.appModel.PendingConfirmation = nil
+
+	// Print new prompt
+	fmt.Print("> ")
 }
 
 // printStatusBar prints the current status
@@ -181,6 +350,13 @@ func (m *AppModel) inputLoop() {
 		}
 
 		input := strings.TrimSpace(scanner.Text())
+
+		// Check if we're waiting for a confirmation response
+		if m.appModel.PendingConfirmation != nil {
+			m.handleConfirmationInput(input)
+			continue
+		}
+
 		if input == "" {
 			fmt.Print("> ")
 			continue

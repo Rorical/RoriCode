@@ -16,7 +16,9 @@ import (
 )
 
 // ShellTool executes shell commands (use with caution)
-type ShellTool struct{}
+type ShellTool struct{
+	confirmator Confirmator
+}
 
 func (s *ShellTool) Name() string {
 	return "shell"
@@ -43,10 +45,26 @@ func (s *ShellTool) RequiredParameters() []string {
 	return []string{"command"}
 }
 
+func (s *ShellTool) SetConfirmator(confirmator Confirmator) {
+	s.confirmator = confirmator
+}
+
 func (s *ShellTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	command, ok := args["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("command parameter must be a string")
+	}
+
+	// Request user confirmation for shell commands that need it
+	if s.confirmator != nil && s.needsConfirmation(command) {
+		dangerous := s.isDangerousCommand(command)
+		if !s.confirmator.RequestConfirmation("Execute shell command", command, dangerous) {
+			return map[string]interface{}{
+				"output":    "User aborted execution",
+				"exit_code": 1,
+				"aborted":   true,
+			}, nil
+		}
 	}
 
 	// Set timeout (default 30 seconds)
@@ -75,6 +93,118 @@ func (s *ShellTool) Execute(ctx context.Context, args map[string]interface{}) (i
 	}
 
 	return result, nil
+}
+
+// isDangerousCommand checks if a shell command is potentially dangerous
+func (s *ShellTool) isDangerousCommand(command string) bool {
+	dangerous := []string{
+		"rm", "rmdir", "del", "delete", "unlink",
+		"format", "fdisk", "mkfs",
+		"dd", "shred", "wipe",
+		"chmod", "chown", "chgrp",
+		"sudo", "su", "doas",
+		"passwd", "usermod", "userdel",
+		"systemctl", "service", "init",
+		"reboot", "shutdown", "halt",
+		"kill", "killall", "pkill",
+		"mv", "move", "rename",
+		"truncate", ">", ">>",
+		"curl", "wget", "nc", "netcat",
+		"iptables", "firewall",
+		"crontab", "at", "batch",
+	}
+	
+	commandLower := strings.ToLower(command)
+	for _, danger := range dangerous {
+		if strings.Contains(commandLower, danger) {
+			return true
+		}
+	}
+	
+	// Check for potentially dangerous patterns
+	dangerousPatterns := []string{
+		">/", ">>", "| rm", "| del",
+		"--force", "-f", "--recursive", "-r",
+		"--no-preserve-root",
+	}
+	
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(commandLower, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// needsConfirmation checks if a command needs user confirmation
+// Returns false for safe, read-only commands that don't modify the system
+func (s *ShellTool) needsConfirmation(command string) bool {
+	// List of safe commands that don't need confirmation
+	safeCommands := []string{
+		// File/directory listing and info
+		"ls", "ll", "la", "dir", "tree", "find",
+		"pwd", "which", "whereis", "type", "file", "stat",
+		
+		// Text display and processing
+		"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep",
+		"awk", "sed", "sort", "uniq", "wc", "cut", "tr", "fold",
+		"diff", "cmp", "comm", "join", "split",
+		
+		// System info (read-only)
+		"ps", "top", "htop", "uptime", "whoami", "id", "groups",
+		"uname", "hostname", "date", "cal", "df", "du", "free",
+		"lscpu", "lsblk", "lsusb", "lspci", "mount",
+		
+		// Environment and variables (read-only)
+		"env", "printenv", "set", "declare", "export",
+		
+		// Network info (read-only)
+		"ping", "traceroute", "nslookup", "dig", "host",
+		"netstat", "ss", "lsof", "ifconfig", "ip",
+		
+		// Version info
+		"--version", "-V", "version",
+		
+		// Git read operations
+		"git status", "git log", "git show", "git diff", "git branch",
+		"git remote", "git config --get", "git ls-files",
+		
+		// Package managers (info only)
+		"apt list", "apt show", "apt search",
+		"yum list", "yum info", "yum search",
+		"brew list", "brew info", "brew search",
+		"npm list", "npm info", "npm search",
+		
+		// Help and manual
+		"help", "man", "info", "apropos", "whatis",
+	}
+	
+	commandLower := strings.ToLower(strings.TrimSpace(command))
+	
+	// Check if it's a safe command
+	for _, safe := range safeCommands {
+		if strings.HasPrefix(commandLower, safe) {
+			return false // No confirmation needed
+		}
+	}
+	
+	// Check for read-only patterns
+	readOnlyPatterns := []string{
+		"--help", "-h", "--version", "-v",
+		"cat ", "head ", "tail ", "less ", "more ",
+		"grep ", "find ", "ls ", "pwd", "which ",
+		"echo ", "printf ", "date", "uptime",
+	}
+	
+	for _, pattern := range readOnlyPatterns {
+		if strings.Contains(commandLower, pattern) {
+			return false // No confirmation needed
+		}
+	}
+	
+	// For everything else, require confirmation
+	return true
 }
 
 // CurrentTimeTool returns the current time
