@@ -35,7 +35,7 @@ func NewChatState() *ChatState {
 }
 
 
-func (cs *ChatState) GetOpenAIHistory() []openai.ChatCompletionMessage {
+func (cs *ChatState) GetChatHistory() []openai.ChatCompletionMessage {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	result := make([]openai.ChatCompletionMessage, len(cs.chatHistory))
@@ -82,7 +82,7 @@ func (cs *ChatState) GetMessages() []models.Message {
 				Content:    openaiMsg.Content,
 				Type:       models.ToolResult,
 				ToolCallID: openaiMsg.ToolCallID,
-				ToolName:   extractToolNameFromHistory(cs.openaiHistory, openaiMsg.ToolCallID),
+				ToolName:   extractToolNameFromHistory(cs.chatHistory, openaiMsg.ToolCallID),
 			})
 		}
 	}
@@ -162,12 +162,12 @@ func (cs *ChatState) StartProcessingWithUserMessage(content string) {
 	cs.isProcessing = true
 	cs.lastError = nil
 	
-	// Add to OpenAI history (single source of truth)
+	// Add to chat history (single source of truth)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: content,
 	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+	cs.chatHistory = append(cs.chatHistory, openaiMsg)
 }
 
 func (cs *ChatState) FinishProcessingWithAssistantMessage(content string) {
@@ -178,12 +178,12 @@ func (cs *ChatState) FinishProcessingWithAssistantMessage(content string) {
 	cs.isProcessing = false
 	cs.lastError = nil
 	
-	// Add to OpenAI history (single source of truth)
+	// Add to chat history (single source of truth)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleAssistant,
 		Content: content,
 	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+	cs.chatHistory = append(cs.chatHistory, openaiMsg)
 }
 
 func (cs *ChatState) FinishProcessingWithError(err error) {
@@ -210,13 +210,13 @@ func (cs *ChatState) AddToolResultMessage(callID, toolName, result string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	
-	// Add to OpenAI history as tool message (UI messages generated on-demand)
+	// Add to chat history as tool message (UI messages generated on-demand)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:       openai.ChatMessageRoleTool,
 		Content:    result,
 		ToolCallID: callID,
 	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+	cs.chatHistory = append(cs.chatHistory, openaiMsg)
 }
 
 // AddAssistantMessageWithToolCalls adds an assistant message with tool calls to OpenAI history
@@ -224,13 +224,13 @@ func (cs *ChatState) AddAssistantMessageWithToolCalls(content string, toolCalls 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	
-	// Add to OpenAI history as single message with content and tool calls (UI messages generated on-demand)
+	// Add to chat history as single message with content and tool calls (UI messages generated on-demand)
 	openaiMsg := openai.ChatCompletionMessage{
 		Role:      openai.ChatMessageRoleAssistant,
 		Content:   content,
 		ToolCalls: toolCalls,
 	}
-	cs.openaiHistory = append(cs.openaiHistory, openaiMsg)
+	cs.chatHistory = append(cs.chatHistory, openaiMsg)
 }
 
 
